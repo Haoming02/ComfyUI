@@ -2356,6 +2356,7 @@ async def init_builtin_extra_nodes():
         "nodes_audio_encoder.py",
         "nodes_rope.py",
         "nodes_nop.py",
+        "nodes_dype.py",
     ]
 
     import_failed = []
