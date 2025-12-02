@@ -1,7 +1,21 @@
 from typing_extensions import override
 
+import comfy.model_sampling
 from comfy.model_patcher import ModelPatcher
 from comfy_api.latest import ComfyExtension, io
+
+
+def calculate_shift(
+    image_seq_len: int,
+    base_seq_len: int = 256,
+    max_seq_len: int = 4096,
+    base_shift: float = 0.5,
+    max_shift: float = 1.15,
+) -> float:
+    m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
+    b = base_shift - m * base_seq_len
+    mu = image_seq_len * m + b
+    return mu
 
 
 def apply_dype_flux(
@@ -12,8 +26,6 @@ def apply_dype_flux(
     dype_start_sigma: float,
     dype_scale: float,
     dype_exponent: float,
-    base_shift: float,
-    max_shift: float,
 ) -> ModelPatcher:
 
     cache_params = (
@@ -23,8 +35,6 @@ def apply_dype_flux(
         dype_start_sigma,
         dype_scale,
         dype_exponent,
-        base_shift,
-        max_shift,
     )
 
     if getattr(model.model, "_dype_params", None) == cache_params:
@@ -32,6 +42,20 @@ def apply_dype_flux(
 
     m = model.clone()
     m.model._dype_params = cache_params
+
+    dype_shift = calculate_shift((latent_width // 2) * (latent_height // 2))
+
+    # comfy_extras/nodes_model_advanced/ModelSamplingFlux
+
+    sampling_base = comfy.model_sampling.ModelSamplingFlux
+    sampling_type = comfy.model_sampling.CONST
+
+    class ModelSamplingDyPE(sampling_base, sampling_type):
+        pass
+
+    model_sampling = ModelSamplingDyPE(model.model.model_config)
+    model_sampling.set_parameters(shift=dype_shift)
+    m.add_object_patch("model_sampling", model_sampling)
 
     return m
 
@@ -72,22 +96,6 @@ class DyPEPatchModelFlux(io.ComfyNode):
                     max=1000.0,
                     step=0.5,
                 ),
-                io.Float.Input(
-                    "base_shift",
-                    default=0.5,
-                    min=0.0,
-                    max=10.0,
-                    step=0.01,
-                    optional=True,
-                ),
-                io.Float.Input(
-                    "max_shift",
-                    default=1.15,
-                    min=0.0,
-                    max=10.0,
-                    step=0.01,
-                    optional=True,
-                ),
             ],
             outputs=[io.Model.Output()],
             is_experimental=True,
@@ -102,21 +110,11 @@ class DyPEPatchModelFlux(io.ComfyNode):
         dype_start_sigma: float,
         dype_scale: float,
         dype_exponent: float,
-        base_shift: float = 0.5,
-        max_shift: float = 1.15,
     ) -> io.NodeOutput:
 
-        *bct, h, w = latent["samples"].shape
+        b, c, h, w = latent["samples"].shape
         m = apply_dype_flux(
-            model,
-            w // 8,
-            h // 8,
-            method,
-            dype_start_sigma,
-            dype_scale,
-            dype_exponent,
-            base_shift,
-            max_shift,
+            model, w // 8, h // 8, method, dype_start_sigma, dype_scale, dype_exponent
         )
 
         return io.NodeOutput(m)
