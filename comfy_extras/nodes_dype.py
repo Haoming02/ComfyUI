@@ -166,7 +166,7 @@ def get_1d_rotary_pos_embed(
             / linear_factor
         )
 
-    freqs = torch.outer(pos, freqs)
+    freqs = pos.unsqueeze(-1) * freqs
 
     is_npu = freqs.device.type == "npu"
     if is_npu:
@@ -175,12 +175,12 @@ def get_1d_rotary_pos_embed(
     if use_real and repeat_interleave_real:
         freqs_cos = (
             freqs.cos()
-            .repeat_interleave(2, dim=1, output_size=freqs.shape[1] * 2)
+            .repeat_interleave(2, dim=-1, output_size=freqs.shape[-1] * 2)
             .float()
         )
         freqs_sin = (
             freqs.sin()
-            .repeat_interleave(2, dim=1, output_size=freqs.shape[1] * 2)
+            .repeat_interleave(2, dim=-1, output_size=freqs.shape[-1] * 2)
             .float()
         )
 
@@ -230,8 +230,8 @@ class FluxPosEmbed(torch.nn.Module):
         freqs_dtype = torch.bfloat16 if ids.device.type == "cuda" else torch.float32
 
         for i in range(n_axes):
-            axis_pos = pos[..., i]
             axis_dim = self.axes_dim[i]
+            axis_pos = pos[..., i]
 
             common_kwargs = {
                 "dim": axis_dim,
@@ -243,7 +243,7 @@ class FluxPosEmbed(torch.nn.Module):
             }
 
             if i > 0:
-                max_pos = pos[:, i].max().item()
+                max_pos = axis_pos.max().item()
                 current_patches = max_pos + 1
 
                 if self.method == "yarn" and current_patches > self.base_patches:
