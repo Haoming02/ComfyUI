@@ -213,8 +213,7 @@ class FluxPosEmbed(torch.nn.Module):
         self.theta = theta
         self.axes_dim = axes_dim
         self.base_resolution = 1024
-        self.patch_size = 16
-        self.base_patches = self.base_resolution // self.patch_size
+        self.base_patches = (self.base_resolution // 8) // 2
         self.method = method
         self.dype = dype if method != "base" else False
         self.current_timestep = 1.0
@@ -228,14 +227,15 @@ class FluxPosEmbed(torch.nn.Module):
         cos_out = []
         sin_out = []
         pos = ids.float()
-        is_mps = ids.device.type == "mps"
-        is_npu = ids.device.type == "npu"
-        freqs_dtype = torch.float32 if (is_mps or is_npu) else torch.float64
+        freqs_dtype = torch.bfloat16 if ids.device.type == "cuda" else torch.float32
 
         for i in range(n_axes):
+            axis_pos = pos[..., i]
+            axis_dim = self.axes_dim[i]
+
             common_kwargs = {
-                "dim": self.axes_dim[i],
-                "pos": pos[:, i],
+                "dim": axis_dim,
+                "pos": axis_pos,
                 "theta": self.theta,
                 "repeat_interleave_real": True,
                 "use_real": True,
@@ -282,9 +282,17 @@ class FluxPosEmbed(torch.nn.Module):
             cos_out.append(cos)
             sin_out.append(sin)
 
-        freqs_cos = torch.cat(cos_out, dim=-1).to(ids.device)
-        freqs_sin = torch.cat(sin_out, dim=-1).to(ids.device)
-        return freqs_cos, freqs_sin
+        emb_parts = []
+        for cos, sin in zip(cos_out, sin_out):
+            cos_reshaped = cos.view(*cos.shape[:-1], -1, 2)[..., :1]
+            sin_reshaped = sin.view(*sin.shape[:-1], -1, 2)[..., :1]
+            row1 = torch.cat([cos_reshaped, -sin_reshaped], dim=-1)
+            row2 = torch.cat([sin_reshaped, cos_reshaped], dim=-1)
+            matrix = torch.stack([row1, row2], dim=-2)
+            emb_parts.append(matrix)
+
+        emb = torch.cat(emb_parts, dim=-3)
+        return emb.unsqueeze(1).to(ids.device)
 
 
 def apply_dype_flux(model: ModelPatcher, method: str) -> ModelPatcher:
