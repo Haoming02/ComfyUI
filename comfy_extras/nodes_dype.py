@@ -1,61 +1,15 @@
 from typing_extensions import override
 
-import comfy.model_sampling
 from comfy.model_patcher import ModelPatcher
 from comfy_api.latest import ComfyExtension, io
 
 
-def calculate_shift(
-    image_seq_len: int,
-    base_seq_len: int = 256,
-    max_seq_len: int = 4096,
-    base_shift: float = 0.5,
-    max_shift: float = 1.15,
-) -> float:
-    m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
-    b = base_shift - m * base_seq_len
-    mu = image_seq_len * m + b
-    return mu
-
-
-def apply_dype_flux(
-    model: ModelPatcher,
-    latent_width: int,
-    latent_height: int,
-    method: str,
-    dype_start_sigma: float,
-    dype_scale: float,
-    dype_exponent: float,
-) -> ModelPatcher:
-
-    cache_params = (
-        latent_width,
-        latent_height,
-        method,
-        dype_start_sigma,
-        dype_scale,
-        dype_exponent,
-    )
-
-    if getattr(model.model, "_dype_params", None) == cache_params:
+def apply_dype_flux(model: ModelPatcher, method: str) -> ModelPatcher:
+    if getattr(model.model, "_dype", None) == method:
         return model
 
     m = model.clone()
-    m.model._dype_params = cache_params
-
-    dype_shift = calculate_shift((latent_width // 2) * (latent_height // 2))
-
-    # comfy_extras/nodes_model_advanced/ModelSamplingFlux
-
-    sampling_base = comfy.model_sampling.ModelSamplingFlux
-    sampling_type = comfy.model_sampling.CONST
-
-    class ModelSamplingDyPE(sampling_base, sampling_type):
-        pass
-
-    model_sampling = ModelSamplingDyPE(model.model.model_config)
-    model_sampling.set_parameters(shift=dype_shift)
-    m.add_object_patch("model_sampling", model_sampling)
+    m.model._dype = method
 
     return m
 
@@ -69,32 +23,10 @@ class DyPEPatchModelFlux(io.ComfyNode):
             category="_for_testing",
             inputs=[
                 io.Model.Input("model"),
-                io.Latent.Input("latent"),
                 io.Combo.Input(
                     "method",
-                    options=["vision_yarn", "yarn", "ntk", "base"],
-                    default="vision_yarn",
-                ),
-                io.Float.Input(
-                    "dype_start_sigma",
-                    default=1.0,
-                    min=0.0,
-                    max=1.0,
-                    step=0.05,
-                ),
-                io.Float.Input(
-                    "dype_scale",
-                    default=2.0,
-                    min=0.0,
-                    max=8.0,
-                    step=0.5,
-                ),
-                io.Float.Input(
-                    "dype_exponent",
-                    default=2.0,
-                    min=0.0,
-                    max=1000.0,
-                    step=0.5,
+                    options=["yarn", "ntk", "base"],
+                    default="yarn",
                 ),
             ],
             outputs=[io.Model.Output()],
@@ -102,21 +34,8 @@ class DyPEPatchModelFlux(io.ComfyNode):
         )
 
     @classmethod
-    def execute(
-        cls,
-        model: ModelPatcher,
-        latent: dict,
-        method: str,
-        dype_start_sigma: float,
-        dype_scale: float,
-        dype_exponent: float,
-    ) -> io.NodeOutput:
-
-        b, c, h, w = latent["samples"].shape
-        m = apply_dype_flux(
-            model, w // 8, h // 8, method, dype_start_sigma, dype_scale, dype_exponent
-        )
-
+    def execute(cls, model: ModelPatcher, method: str) -> io.NodeOutput:
+        m = apply_dype_flux(model, method)
         return io.NodeOutput(m)
 
 
