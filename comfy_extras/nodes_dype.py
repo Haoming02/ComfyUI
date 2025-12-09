@@ -1,6 +1,7 @@
 # adapted from https://github.com/guyyariv/DyPE
 
 import math
+from typing import Callable
 
 import numpy as np
 import torch
@@ -293,19 +294,16 @@ def apply_dype_flux(model: ModelPatcher, method: str) -> ModelPatcher:
     pos_embedder = FluxPosEmbed(_theta, _axes_dim, method)
     m.add_object_patch("diffusion_model.pe_embedder", pos_embedder)
 
-    sigma_max = m.model.model_sampling.sigma_max.item()
+    sigma_max: float = m.model.model_sampling.sigma_max.item()
 
-    def dype_wrapper_function(model_function, args_dict):
-        timestep_tensor = args_dict.get("timestep")
-        if timestep_tensor is not None and timestep_tensor.numel() > 0:
-            current_sigma = timestep_tensor.flatten()[0].item()
+    def dype_wrapper_function(apply_model: Callable, args: dict):
+        timestep: torch.Tensor = args["timestep"]
+        sigma: float = timestep.item()
 
-            if sigma_max > 0:
-                normalized_timestep = min(max(current_sigma / sigma_max, 0.0), 1.0)
-                pos_embedder.set_timestep(normalized_timestep)
+        normalized_timestep = min(max(sigma / sigma_max, 0.0), 1.0)
+        pos_embedder.set_timestep(normalized_timestep)
 
-        input_x, c = args_dict.get("input"), args_dict.get("c", {})
-        return model_function(input_x, args_dict.get("timestep"), **c)
+        return apply_model(args["input"], timestep, **args["c"])
 
     m.set_model_unet_function_wrapper(dype_wrapper_function)
 
