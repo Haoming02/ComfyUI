@@ -40,7 +40,7 @@ def find_newbase_ntk(dim, base, scale):
 
 def get_1d_rotary_pos_embed(
     dim: int,
-    pos: np.ndarray | int,
+    pos: torch.Tensor,
     theta: float = 10000.0,
     use_real=False,
     linear_factor=1.0,
@@ -89,11 +89,6 @@ def get_1d_rotary_pos_embed(
     """
     assert dim % 2 == 0
 
-    if isinstance(pos, int):
-        pos = torch.arange(pos)
-    if isinstance(pos, np.ndarray):
-        pos = torch.from_numpy(pos)
-
     device = pos.device
 
     if yarn and max_pe_len is not None and max_pe_len > ori_max_pe_len:
@@ -102,10 +97,8 @@ def get_1d_rotary_pos_embed(
 
         scale = torch.clamp_min(max_pe_len / ori_max_pe_len, 1.0)
 
-        beta_0 = 1.25
-        beta_1 = 0.75
-        gamma_0 = 16
-        gamma_1 = 2
+        beta_0, beta_1 = 1.25, 0.75
+        gamma_0, gamma_1 = 16, 2
 
         freqs_base = 1.0 / (
             theta ** (torch.arange(0, dim, 2, dtype=freqs_dtype, device=device) / dim)
@@ -170,30 +163,31 @@ def get_1d_rotary_pos_embed(
     if is_npu:
         freqs = freqs.float()
 
-    if use_real and repeat_interleave_real:
-        freqs_cos = (
-            freqs.cos()
-            .repeat_interleave(2, dim=-1, output_size=freqs.shape[-1] * 2)
-            .float()
-        )
-        freqs_sin = (
-            freqs.sin()
-            .repeat_interleave(2, dim=-1, output_size=freqs.shape[-1] * 2)
-            .float()
-        )
+    if use_real:
+        if repeat_interleave_real:
+            freqs_cos = (
+                freqs.cos()
+                .repeat_interleave(2, dim=-1, output_size=freqs.shape[-1] * 2)
+                .float()
+            )
+            freqs_sin = (
+                freqs.sin()
+                .repeat_interleave(2, dim=-1, output_size=freqs.shape[-1] * 2)
+                .float()
+            )
 
-        if yarn and max_pe_len is not None and max_pe_len > ori_max_pe_len:
-            mscale = torch.where(
-                scale <= 1.0, torch.tensor(1.0), 0.1 * torch.log(scale) + 1.0
-            ).to(scale)
-            freqs_cos = freqs_cos * mscale
-            freqs_sin = freqs_sin * mscale
+            if yarn and max_pe_len is not None and max_pe_len > ori_max_pe_len:
+                mscale = torch.where(
+                    scale <= 1.0, torch.tensor(1.0), 0.1 * torch.log(scale) + 1.0
+                ).to(scale)
+                freqs_cos = freqs_cos * mscale
+                freqs_sin = freqs_sin * mscale
 
-        return freqs_cos, freqs_sin
-    elif use_real:
-        freqs_cos = torch.cat([freqs.cos(), freqs.cos()], dim=-1).float()
-        freqs_sin = torch.cat([freqs.sin(), freqs.sin()], dim=-1).float()
-        return freqs_cos, freqs_sin
+            return freqs_cos, freqs_sin
+        else:
+            freqs_cos = torch.cat([freqs.cos(), freqs.cos()], dim=-1).float()
+            freqs_sin = torch.cat([freqs.sin(), freqs.sin()], dim=-1).float()
+            return freqs_cos, freqs_sin
     else:
         freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
         return freqs_cis
@@ -233,37 +227,34 @@ class FluxPosEmbed(torch.nn.Module):
                 "freqs_dtype": freqs_dtype,
             }
 
-            if i > 0:
-                max_pos = axis_pos.max().item()
-                current_patches = max_pos + 1
+            max_pos = axis_pos.max().item()
+            current_patches = max_pos + 1
 
-                if self.method == "yarn" and current_patches > self.base_patches:
-                    max_pe_len = torch.tensor(
-                        current_patches, dtype=freqs_dtype, device=pos.device
-                    )
-                    cos, sin = get_1d_rotary_pos_embed(
-                        **common_kwargs,
-                        yarn=True,
-                        max_pe_len=max_pe_len,
-                        ori_max_pe_len=self.base_patches,
-                        current_timestep=self.current_timestep,
-                    )
-
-                elif self.method == "ntk" and current_patches > self.base_patches:
-                    base_ntk = (current_patches / self.base_patches) ** (
-                        self.axes_dim[i] / (self.axes_dim[i] - 2)
-                    )
-                    ntk_factor = base_ntk ** (2.0 * (self.current_timestep**2.0))
-                    ntk_factor = max(1.0, ntk_factor)
-
-                    cos, sin = get_1d_rotary_pos_embed(
-                        **common_kwargs, ntk_factor=ntk_factor
-                    )
-
-                else:
-                    cos, sin = get_1d_rotary_pos_embed(**common_kwargs)
-            else:
+            if i == 0 or current_patches <= self.base_patches:
                 cos, sin = get_1d_rotary_pos_embed(**common_kwargs)
+
+            elif self.method == "yarn":
+                max_pe_len = torch.tensor(
+                    current_patches, dtype=freqs_dtype, device=pos.device
+                )
+                cos, sin = get_1d_rotary_pos_embed(
+                    **common_kwargs,
+                    yarn=True,
+                    max_pe_len=max_pe_len,
+                    ori_max_pe_len=self.base_patches,
+                    current_timestep=self.current_timestep,
+                )
+
+            elif self.method == "ntk":
+                base_ntk = (current_patches / self.base_patches) ** (
+                    self.axes_dim[i] / (self.axes_dim[i] - 2)
+                )
+                ntk_factor = base_ntk ** (2.0 * (self.current_timestep**2.0))
+                ntk_factor = max(1.0, ntk_factor)
+
+                cos, sin = get_1d_rotary_pos_embed(
+                    **common_kwargs, ntk_factor=ntk_factor
+                )
 
             cos_out.append(cos)
             sin_out.append(sin)
