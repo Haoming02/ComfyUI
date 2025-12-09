@@ -49,7 +49,6 @@ def get_1d_rotary_pos_embed(
     yarn=False,
     max_pe_len=None,
     ori_max_pe_len=64,
-    dype=False,
     current_timestep=1.0,
 ):
     """
@@ -80,8 +79,6 @@ def get_1d_rotary_pos_embed(
             Maximum position encoding length (current patches for vision models).
         ori_max_pe_len (`int`, *optional*, defaults to 64):
             Original maximum position encoding length (base patches for vision models).
-        dype (`bool`, *optional*, defaults to False):
-            If True, enable DyPE (Dynamic Position Encoding) with timestep-aware scaling.
         current_timestep (`float`, *optional*, defaults to 1.0):
             Current timestep for DyPE, normalized to [0, 1] where 1 is pure noise.
 
@@ -131,9 +128,8 @@ def get_1d_rotary_pos_embed(
         if freqs_ntk.dim() > 1:
             freqs_ntk = freqs_ntk.squeeze()
 
-        if dype:
-            beta_0 = beta_0 ** (2.0 * (current_timestep**2.0))
-            beta_1 = beta_1 ** (2.0 * (current_timestep**2.0))
+        beta_0 = beta_0 ** (2.0 * (current_timestep**2.0))
+        beta_1 = beta_1 ** (2.0 * (current_timestep**2.0))
 
         low, high = find_correction_range(beta_0, beta_1, dim, theta, ori_max_pe_len)
         low = max(0, low)
@@ -144,9 +140,8 @@ def get_1d_rotary_pos_embed(
         )
         freqs = freqs_linear * (1 - freqs_mask) + freqs_ntk * freqs_mask
 
-        if dype:
-            gamma_0 = gamma_0 ** (2.0 * (current_timestep**2.0))
-            gamma_1 = gamma_1 ** (2.0 * (current_timestep**2.0))
+        gamma_0 = gamma_0 ** (2.0 * (current_timestep**2.0))
+        gamma_1 = gamma_1 ** (2.0 * (current_timestep**2.0))
 
         low, high = find_correction_range(gamma_0, gamma_1, dim, theta, ori_max_pe_len)
         low = max(0, low)
@@ -204,20 +199,13 @@ def get_1d_rotary_pos_embed(
 
 
 class FluxPosEmbed(torch.nn.Module):
-    def __init__(
-        self,
-        theta: int,
-        axes_dim: list[int],
-        method: str = "yarn",
-        dype: bool = True,
-    ):
+    def __init__(self, theta: int, axes_dim: list[int], method: str = "yarn"):
         super().__init__()
         self.theta = theta
         self.axes_dim = axes_dim
         self.base_resolution = 1024
         self.base_patches = (self.base_resolution // 8) // 2
         self.method = method
-        self.dype = dype if method != "base" else False
         self.current_timestep = 1.0
 
     def set_timestep(self, timestep: float):
@@ -257,7 +245,6 @@ class FluxPosEmbed(torch.nn.Module):
                         yarn=True,
                         max_pe_len=max_pe_len,
                         ori_max_pe_len=self.base_patches,
-                        dype=self.dype,
                         current_timestep=self.current_timestep,
                     )
 
@@ -265,11 +252,7 @@ class FluxPosEmbed(torch.nn.Module):
                     base_ntk = (current_patches / self.base_patches) ** (
                         self.axes_dim[i] / (self.axes_dim[i] - 2)
                     )
-                    ntk_factor = (
-                        base_ntk ** (2.0 * (self.current_timestep**2.0))
-                        if self.dype
-                        else base_ntk
-                    )
+                    ntk_factor = base_ntk ** (2.0 * (self.current_timestep**2.0))
                     ntk_factor = max(1.0, ntk_factor)
 
                     cos, sin = get_1d_rotary_pos_embed(
@@ -307,7 +290,7 @@ def apply_dype_flux(model: ModelPatcher, method: str) -> ModelPatcher:
     _pe_embedder = m.model.diffusion_model.pe_embedder
     _theta, _axes_dim = _pe_embedder.theta, _pe_embedder.axes_dim
 
-    pos_embedder = FluxPosEmbed(_theta, _axes_dim, method, dype=True)
+    pos_embedder = FluxPosEmbed(_theta, _axes_dim, method)
     m.add_object_patch("diffusion_model.pe_embedder", pos_embedder)
 
     sigma_max = m.model.model_sampling.sigma_max.item()
@@ -338,11 +321,7 @@ class DyPEPatchModelFlux(io.ComfyNode):
             category="_for_testing",
             inputs=[
                 io.Model.Input("model"),
-                io.Combo.Input(
-                    "method",
-                    options=["yarn", "ntk", "base"],
-                    default="yarn",
-                ),
+                io.Combo.Input("method", options=["yarn", "ntk"], default="yarn"),
             ],
             outputs=[io.Model.Output()],
             is_experimental=True,
