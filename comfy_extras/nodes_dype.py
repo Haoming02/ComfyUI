@@ -273,19 +273,13 @@ class FluxPosEmbed(torch.nn.Module):
 
 
 def apply_dype_flux(model: ModelPatcher, method: str) -> ModelPatcher:
-    if getattr(model.model, "_dype", None) == method:
-        return model
-
-    m = model.clone()
-    m.model._dype = method
-
-    _pe_embedder = m.model.diffusion_model.pe_embedder
+    _pe_embedder = model.model.diffusion_model.pe_embedder
     _theta, _axes_dim = _pe_embedder.theta, _pe_embedder.axes_dim
 
     pos_embedder = FluxPosEmbed(_theta, _axes_dim, method)
-    m.add_object_patch("diffusion_model.pe_embedder", pos_embedder)
+    model.add_object_patch("diffusion_model.pe_embedder", pos_embedder)
 
-    sigma_max: float = m.model.model_sampling.sigma_max.item()
+    sigma_max: float = model.model.model_sampling.sigma_max.item()
 
     def dype_wrapper_function(apply_model: Callable, args: dict):
         timestep: torch.Tensor = args["timestep"]
@@ -296,9 +290,9 @@ def apply_dype_flux(model: ModelPatcher, method: str) -> ModelPatcher:
 
         return apply_model(args["input"], timestep, **args["c"])
 
-    m.set_model_unet_function_wrapper(dype_wrapper_function)
+    model.set_model_unet_function_wrapper(dype_wrapper_function)
 
-    return m
+    return model
 
 
 class DyPEPatchModelFlux(io.ComfyNode):
@@ -318,8 +312,9 @@ class DyPEPatchModelFlux(io.ComfyNode):
 
     @classmethod
     def execute(cls, model: ModelPatcher, method: str) -> io.NodeOutput:
-        m = apply_dype_flux(model, method)
-        return io.NodeOutput(m)
+        model = model.clone()
+        model = apply_dype_flux(model, method)
+        return io.NodeOutput(model)
 
 
 class DyPEExtension(ComfyExtension):
