@@ -15,7 +15,7 @@ class Sage3PatchModel(io.ComfyNode):
         return io.Schema(
             node_id="Sage3PatchModel",
             display_name="Patch SageAttention 3",
-            description="Apply `attention3_sage` to the middle blocks and steps, while using optimized_attention for the first/last blocks and steps",
+            description="Patch the model to use `attention3_sage` during the middle blocks and steps, keeping the default attention function for the first/last blocks and steps",
             category="_for_testing",
             inputs=[
                 io.Model.Input("model"),
