@@ -21,6 +21,7 @@ class Sage3PatchModel(io.ComfyNode):
                 io.Model.Input("model"),
             ],
             outputs=[io.Model.Output()],
+            hidden=[io.Hidden.unique_id],
             is_experimental=True,
         )
 
@@ -29,10 +30,11 @@ class Sage3PatchModel(io.ComfyNode):
         sage3: Callable | None = get_attention_function("sage3", default=None)
 
         if sage3 is None:
-            PromptServer.instance.send_progress_text(
-                "`sageattn3` is not installed / available...",
-                cls.hidden.unique_id,
-            )
+            if cls.hidden.unique_id:
+                PromptServer.instance.send_progress_text(
+                    "`sageattn3` is not installed / available...",
+                    cls.hidden.unique_id,
+                )
             return io.NodeOutput(model)
 
         def attention_override(func: Callable, *args, **kwargs):
