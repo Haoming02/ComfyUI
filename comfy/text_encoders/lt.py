@@ -25,7 +25,7 @@ def ltxv_te(*args, **kwargs):
 class Gemma3_12BTokenizer(sd1_clip.SDTokenizer):
     def __init__(self, embedding_directory=None, tokenizer_data={}):
         tokenizer = tokenizer_data.get("spiece_model", None)
-        super().__init__(tokenizer, pad_with_end=False, embedding_size=3840, embedding_key='gemma3_12b', tokenizer_class=SPieceTokenizer, has_end_token=False, pad_to_max_length=False, max_length=99999999, min_length=1, tokenizer_args={"add_bos": True, "add_eos": False}, tokenizer_data=tokenizer_data)
+        super().__init__(tokenizer, pad_with_end=False, embedding_size=3840, embedding_key='gemma3_12b', tokenizer_class=SPieceTokenizer, has_end_token=False, pad_to_max_length=False, max_length=99999999, min_length=512, pad_left=True, disable_weights=True, tokenizer_args={"add_bos": True, "add_eos": False}, tokenizer_data=tokenizer_data)
 
     def state_dict(self):
         return {"spiece_model": self.tokenizer.serialize_model()}
@@ -97,6 +97,7 @@ class LTXAVTEModel(torch.nn.Module):
         token_weight_pairs = token_weight_pairs["gemma3_12b"]
 
         out, pooled, extra = self.gemma3_12b.encode_token_weights(token_weight_pairs)
+        out = out[:, :, -torch.sum(extra["attention_mask"]).item():]
         out_device = out.device
         if comfy.model_management.should_use_bf16(self.execution_device):
             out = out.to(device=self.execution_device, dtype=torch.bfloat16)
@@ -118,9 +119,18 @@ class LTXAVTEModel(torch.nn.Module):
             sdo = comfy.utils.state_dict_prefix_replace(sd, {"text_embedding_projection.aggregate_embed.weight": "text_embedding_projection.weight", "model.diffusion_model.video_embeddings_connector.": "video_embeddings_connector.", "model.diffusion_model.audio_embeddings_connector.": "audio_embeddings_connector."}, filter_keys=True)
             if len(sdo) == 0:
                 sdo = sd
-            missing, unexpected = self.load_state_dict(sdo, strict=False)
-            missing = [k for k in missing if not k.startswith("gemma3_12b.")] # filter out keys that belong to the main gemma model
-            return (missing, unexpected)
+
+            missing_all = []
+            unexpected_all = []
+
+            for prefix, component in [("text_embedding_projection.", self.text_embedding_projection), ("video_embeddings_connector.", self.video_embeddings_connector), ("audio_embeddings_connector.", self.audio_embeddings_connector)]:
+                component_sd = {k.replace(prefix, ""): v for k, v in sdo.items() if k.startswith(prefix)}
+                if component_sd:
+                    missing, unexpected = component.load_state_dict(component_sd, strict=False, assign=getattr(self, "can_assign_sd", False))
+                    missing_all.extend([f"{prefix}{k}" for k in missing])
+                    unexpected_all.extend([f"{prefix}{k}" for k in unexpected])
+
+            return (missing_all, unexpected_all)
 
     def memory_estimation_function(self, token_weight_pairs, device=None):
         constant = 6.0
@@ -129,6 +139,7 @@ class LTXAVTEModel(torch.nn.Module):
 
         token_weight_pairs = token_weight_pairs.get("gemma3_12b", [])
         num_tokens = sum(map(lambda a: len(a), token_weight_pairs))
+        num_tokens = max(num_tokens, 64)
         return num_tokens * constant * 1024 * 1024
 
 def ltxav_te(dtype_llama=None, llama_quantization_metadata=None):

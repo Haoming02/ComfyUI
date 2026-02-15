@@ -155,6 +155,8 @@ class SDClipModel(torch.nn.Module, ClipTokenWeightEncoder):
         self.execution_device = options.get("execution_device", self.execution_device)
         if isinstance(self.layer, list) or self.layer == "all":
             pass
+        elif isinstance(layer_idx, list):
+            self.layer = layer_idx
         elif layer_idx is None or abs(layer_idx) > self.num_layers:
             self.layer = "last"
         else:
@@ -169,8 +171,9 @@ class SDClipModel(torch.nn.Module, ClipTokenWeightEncoder):
 
     def process_tokens(self, tokens, device):
         end_token = self.special_tokens.get("end", None)
+        pad_token = self.special_tokens.get("pad", -1)
         if end_token is None:
-            cmp_token = self.special_tokens.get("pad", -1)
+            cmp_token = pad_token
         else:
             cmp_token = end_token
 
@@ -184,15 +187,21 @@ class SDClipModel(torch.nn.Module, ClipTokenWeightEncoder):
             other_embeds = []
             eos = False
             index = 0
+            left_pad = False
             for y in x:
                 if isinstance(y, numbers.Integral):
-                    if eos:
+                    token = int(y)
+                    if index == 0 and token == pad_token:
+                        left_pad = True
+
+                    if eos or (left_pad and token == pad_token):
                         attention_mask.append(0)
                     else:
                         attention_mask.append(1)
-                    token = int(y)
+                        left_pad = False
+
                     tokens_temp += [token]
-                    if not eos and token == cmp_token:
+                    if not eos and token == cmp_token and not left_pad:
                         if end_token is None:
                             attention_mask[-1] = 0
                         eos = True
@@ -297,7 +306,7 @@ class SDClipModel(torch.nn.Module, ClipTokenWeightEncoder):
         return self(tokens)
 
     def load_sd(self, sd):
-        return self.transformer.load_state_dict(sd, strict=False)
+        return self.transformer.load_state_dict(sd, strict=False, assign=getattr(self, "can_assign_sd", False))
 
 def parse_parentheses(string):
     result = []
@@ -466,7 +475,7 @@ def load_embed(embedding_name, embedding_directory, embedding_size, embed_key=No
     return embed_out
 
 class SDTokenizer:
-    def __init__(self, tokenizer_path=None, max_length=77, pad_with_end=True, embedding_directory=None, embedding_size=768, embedding_key='clip_l', tokenizer_class=CLIPTokenizer, has_start_token=True, has_end_token=True, pad_to_max_length=True, min_length=None, pad_token=None, end_token=None, min_padding=None, pad_left=False, disable_weights=False, tokenizer_data={}, tokenizer_args={}):
+    def __init__(self, tokenizer_path=None, max_length=77, pad_with_end=True, embedding_directory=None, embedding_size=768, embedding_key='clip_l', tokenizer_class=CLIPTokenizer, has_start_token=True, has_end_token=True, pad_to_max_length=True, min_length=None, pad_token=None, end_token=None, start_token=None, min_padding=None, pad_left=False, disable_weights=False, tokenizer_data={}, tokenizer_args={}):
         if tokenizer_path is None:
             tokenizer_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "sd1_tokenizer")
         self.tokenizer = tokenizer_class.from_pretrained(tokenizer_path, **tokenizer_args)
@@ -479,8 +488,15 @@ class SDTokenizer:
         empty = self.tokenizer('')["input_ids"]
         self.tokenizer_adds_end_token = has_end_token
         if has_start_token:
-            self.tokens_start = 1
-            self.start_token = empty[0]
+            if len(empty) > 0:
+                self.tokens_start = 1
+                self.start_token = empty[0]
+            else:
+                self.tokens_start = 0
+                self.start_token = start_token
+                if start_token is None:
+                    logging.warning("WARNING: There's something wrong with your tokenizers.'")
+
             if end_token is not None:
                 self.end_token = end_token
             else:
@@ -488,7 +504,7 @@ class SDTokenizer:
                     self.end_token = empty[1]
         else:
             self.tokens_start = 0
-            self.start_token = None
+            self.start_token = start_token
             if end_token is not None:
                 self.end_token = end_token
             else:

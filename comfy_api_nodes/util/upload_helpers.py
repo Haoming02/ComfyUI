@@ -49,7 +49,7 @@ async def upload_images_to_comfyapi(
     mime_type: str | None = None,
     wait_label: str | None = "Uploading",
     show_batch_index: bool = True,
-    total_pixels: int = 2048 * 2048,
+    total_pixels: int | None = 2048 * 2048,
 ) -> list[str]:
     """
     Uploads images to ComfyUI API and returns download URLs.
@@ -86,6 +86,28 @@ async def upload_images_to_comfyapi(
         url = await upload_file_to_comfyapi(cls, img_io, img_io.name, mime_type, effective_label, batch_start_ts)
         download_urls.append(url)
     return download_urls
+
+
+async def upload_image_to_comfyapi(
+    cls: type[IO.ComfyNode],
+    image: torch.Tensor,
+    *,
+    mime_type: str | None = None,
+    wait_label: str | None = "Uploading",
+    total_pixels: int | None = 2048 * 2048,
+) -> str:
+    """Uploads a single image to ComfyUI API and returns its download URL."""
+    return (
+        await upload_images_to_comfyapi(
+            cls,
+            image,
+            max_images=1,
+            mime_type=mime_type,
+            wait_label=wait_label,
+            show_batch_index=False,
+            total_pixels=total_pixels,
+        )
+    )[0]
 
 
 async def upload_audio_to_comfyapi(
@@ -233,17 +255,14 @@ async def upload_file(
         monitor_task = asyncio.create_task(_monitor())
         sess: aiohttp.ClientSession | None = None
         try:
-            try:
-                request_logger.log_request_response(
-                    operation_id=operation_id,
-                    request_method="PUT",
-                    request_url=upload_url,
-                    request_headers=headers or None,
-                    request_params=None,
-                    request_data=f"[File data {len(data)} bytes]",
-                )
-            except Exception as e:
-                logging.debug("[DEBUG] upload request logging failed: %s", e)
+            request_logger.log_request_response(
+                operation_id=operation_id,
+                request_method="PUT",
+                request_url=upload_url,
+                request_headers=headers or None,
+                request_params=None,
+                request_data=f"[File data {len(data)} bytes]",
+            )
 
             sess = aiohttp.ClientSession(timeout=timeout)
             req = sess.put(upload_url, data=data, headers=headers, skip_auto_headers=skip_auto_headers)
@@ -289,31 +308,27 @@ async def upload_file(
                         delay *= retry_backoff
                         continue
                     raise Exception(f"Failed to upload (HTTP {resp.status}).")
-                try:
-                    request_logger.log_request_response(
-                        operation_id=operation_id,
-                        request_method="PUT",
-                        request_url=upload_url,
-                        response_status_code=resp.status,
-                        response_headers=dict(resp.headers),
-                        response_content="File uploaded successfully.",
-                    )
-                except Exception as e:
-                    logging.debug("[DEBUG] upload response logging failed: %s", e)
+                request_logger.log_request_response(
+                    operation_id=operation_id,
+                    request_method="PUT",
+                    request_url=upload_url,
+                    response_status_code=resp.status,
+                    response_headers=dict(resp.headers),
+                    response_content="File uploaded successfully.",
+                )
                 return
         except asyncio.CancelledError:
             raise ProcessingInterrupted("Task cancelled") from None
         except (aiohttp.ClientError, OSError) as e:
             if attempt <= max_retries:
-                with contextlib.suppress(Exception):
-                    request_logger.log_request_response(
-                        operation_id=operation_id,
-                        request_method="PUT",
-                        request_url=upload_url,
-                        request_headers=headers or None,
-                        request_data=f"[File data {len(data)} bytes]",
-                        error_message=f"{type(e).__name__}: {str(e)} (will retry)",
-                    )
+                request_logger.log_request_response(
+                    operation_id=operation_id,
+                    request_method="PUT",
+                    request_url=upload_url,
+                    request_headers=headers or None,
+                    request_data=f"[File data {len(data)} bytes]",
+                    error_message=f"{type(e).__name__}: {str(e)} (will retry)",
+                )
                 await sleep_with_interrupt(
                     delay,
                     cls,
