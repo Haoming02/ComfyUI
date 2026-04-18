@@ -28,9 +28,9 @@ class ConvertAny(io.ComfyNode):
             description="""
 Convert one primitive type to another
 - int: Call the Python native int() function ; return the integer with decimal places removed
-- int (round): Convert the value to float first, then call the Python native round() function ; return a rounded integer
+- int (round): Call the Python native round() function ; return a rounded integer
 - float: Call the Python native float() function ; return a decimal value
-- string: Call the Python native str() function ; return the value as string or its string representation
+- string: Call the Python native str() function ; return the value's string representation
 - bool: Call the Python native bool() function ; return whether the value is considered true or false
 - bool (string): Return whether the string is one of ["true", "yes", "t", "y", "1"] (case insensitive)
             """,
@@ -87,7 +87,7 @@ Convert one primitive type to another
         except (TypeError, ValueError) as e:
             if cls.hidden.unique_id:
                 PromptServer.instance.send_progress_text(
-                    f'Failed to convert "{input_value}" ({type(input_value).__name__}) to "{output_type}"\n{e}',
+                    f'Failed to convert "{input_value}" ({type(input_value).__name__}) to "{output_type}":\n{e}',
                     cls.hidden.unique_id,
                 )
             return io.NodeOutput(input_value)
