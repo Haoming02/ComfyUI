@@ -84,7 +84,10 @@ Convert one primitive type to another
                     if not isinstance(input_value, str):
                         raise TypeError("Input is not a string")
                     output_value = input_value.strip().lower() in TRUTHFUL
-        except (TypeError, ValueError) as e:
+                case _:
+                    # this should never happen as execution would throw "Value not in list" during validation
+                    return io.NodeOutput(input_value)
+        except (TypeError, ValueError, ArithmeticError) as e:
             if cls.hidden.unique_id:
                 PromptServer.instance.send_progress_text(
                     f'Failed to convert "{input_value}" ({type(input_value).__name__}) to "{output_type}":\n{e}',
